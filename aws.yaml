@@ -1,0 +1,403 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+
+  UbuntuAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+
+  DBUsername:
+    Type: String
+    Default: admin
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+
+Resources:
+
+  MyVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/24
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: Metrics-VPC
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVpc
+      CidrBlock: 10.0.0.128/26
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet-A
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVpc
+      CidrBlock: 10.0.0.192/26
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet-B
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVpc
+      CidrBlock: 10.0.0.0/26
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet-A
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVpc
+      CidrBlock: 10.0.0.64/26
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet-B
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Metrics-IGW
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVpc
+      InternetGatewayId: !Ref MyInternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVpc
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyInternetGateway
+
+  PublicRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+  PublicRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  NatEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachGateway
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: Metrics-NAT
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVpc
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetA
+
+  PrivateRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetB
+
+  JenkinsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Jenkins controller security group
+      VpcId: !Ref MyVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  AgentSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Jenkins agent security group
+      VpcId: !Ref MyVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref JenkinsSecurityGroup
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Application Load Balancer HTTP
+      VpcId: !Ref MyVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  MetricsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Metrics server security group
+      VpcId: !Ref MyVpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  RDSSecurityGroup:
+  Type: AWS::EC2::SecurityGroup
+  Properties:
+    GroupDescription: PostgreSQL RDS security group
+    VpcId: !Ref MyVpc
+    SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        SourceSecurityGroupId: !Ref MetricsSecurityGroup
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: MySQL private subnet group
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  MetricsEC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: MetricsEC2Role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+  MetricsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: MetricsInstanceProfile
+      Roles:
+        - !Ref MetricsEC2Role
+
+  JenkinsController:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: c7i-flex.large
+      ImageId: !Ref UbuntuAMI
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds:
+        - !Ref JenkinsSecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          apt update -y
+          apt install -y openjdk-17-jdk wget git
+          wget -O /usr/share/keyrings/jenkins-keyring.asc https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+          echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" | tee /etc/apt/sources.list.d/jenkins.list
+          apt update -y
+          apt install -y jenkins
+          systemctl enable jenkins
+          systemctl start jenkins
+
+  JenkinsAgent:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: c7i-flex.large
+      ImageId: !Ref UbuntuAMI
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref AgentSecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          apt update -y
+          apt install -y openjdk-17-jdk git docker.io
+          systemctl enable docker
+          systemctl start docker
+          usermod -aG docker ubuntu
+
+  MetricsServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: c7i-flex.large
+      ImageId: !Ref UbuntuAMI
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref MetricsSecurityGroup
+      IamInstanceProfile: !Ref MetricsInstanceProfile
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          apt update -y
+          apt install -y python3 python3-pip git
+          pip3 install flask psutil pymysql
+          mkdir -p /opt/metrics
+          cd /opt/metrics
+          touch app.py
+
+  MetricsDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: postgres
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      StorageType: gp3
+      DBName: sysmetric
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      PubliclyAccessible: false
+      VpcSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+  MetricsLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: Metrics-ALB
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+
+  MetricsTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: metrics-target
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref MyVpc
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "8000"
+      HealthCheckPath: /
+      Targets:
+        - Id: !Ref MetricsServer
+          Port: 8000
+
+  MetricsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref MetricsLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MetricsTargetGroup
+
+Outputs:
+
+  VPCID:
+    Description: VPC ID
+    Value: !Ref MyVpc
+
+  PublicSubnetAID:
+    Description: Public Subnet A ID
+    Value: !Ref PublicSubnetA
+
+  PublicSubnetBID:
+    Description: Public Subnet B ID
+    Value: !Ref PublicSubnetB
+
+  PrivateSubnetAID:
+    Description: Private Subnet A ID
+    Value: !Ref PrivateSubnetA
+
+  PrivateSubnetBID:
+    Description: Private Subnet B ID
+    Value: !Ref PrivateSubnetB
+
+  JenkinsControllerID:
+    Description: Jenkins Controller EC2 Instance ID
+    Value: !Ref JenkinsController
+
+  JenkinsAgentID:
+    Description: Jenkins Agent EC2 Instance ID
+    Value: !Ref JenkinsAgent
+
+  MetricsServerID:
+    Description: Metrics Server EC2 Instance ID
+    Value: !Ref MetricsServer
+
+  JenkinsControllerPublicIP:
+    Description: Jenkins Controller Public IP
+    Value: !GetAtt JenkinsController.PublicIp
+
+  DatabaseEndpoint:
+    Description: RDS MySQL Endpoint
+    Value: !GetAtt MetricsDatabase.Endpoint.Address
+
+  LoadBalancerDNS:
+    Description: Application Load Balancer DNS Name
+    Value: !GetAtt MetricsLoadBalancer.DNSName

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sysmetric-config
+  namespace: sysmetric
+
+data:
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_NAME: sysmetric
+  DB_USER: sysmetric

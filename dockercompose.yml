@@ -1,0 +1,30 @@
+services:
+
+  app:
+    build: .
+    container_name: sysmetric
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: sysmetric
+      DB_USER: sysmetric
+      DB_PASSWORD: sysmetric_password
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16
+    container_name: sysmetric-db
+    environment:
+      POSTGRES_DB: sysmetric
+      POSTGRES_USER: sysmetric
+      POSTGRES_PASSWORD: sysmetric_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
