@@ -114,7 +114,7 @@ sysmetric/
 
 Clone the repository:
 
-git clone https://github.com/YOUR_USERNAME/sysmetric.git
+git clone https://github.com/atulsharma15446-lang/sysmetric.git
 cd sysmetric
 
 Install dependencies:
